@@ -59,8 +59,9 @@ function todayStr() {
   return new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }
 
-function fmt(n) {
-  return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+function fmt(n, chatId) {
+  const currency = String(chatId) === '5472449463' ? ' €' : ' ₽';
+  return Math.round(n).toLocaleString('ru-RU') + currency;
 }
 
 function catLabel(c) {
@@ -164,13 +165,13 @@ async function handleMessage(msg) {
     const monthName = new Date().toLocaleString('ru-RU', { month: 'long', year: 'numeric' });
     await sendMessage(chatId,
       `📊 <b>Баланс за ${monthName}</b>\n\n` +
-      `💰 Доход: <b>${fmt(income)}</b>\n` +
-      `🏦 Себе — цель (${selfPct}%): <b>${fmt(target)}</b>\n` +
-      `🏦 Откладываю факт: <b>${fmt(saved)}</b> (${savePct}%)\n` +
-      `📈 Инвестиции: <b>${fmt(invested)}</b> (${invPct}%)\n` +
-      `💸 Расходы: <b>${fmt(expense)}</b> (${expPct}%)\n` +
+      `💰 Доход: <b>${fmt(income, chatId)}</b>\n` +
+      `🏦 Себе — цель (${selfPct}%): <b>${fmt(target, chatId)}</b>\n` +
+      `🏦 Откладываю факт: <b>${fmt(saved, chatId)}</b> (${savePct}%)\n` +
+      `📈 Инвестиции: <b>${fmt(invested, chatId)}</b> (${invPct}%)\n` +
+      `💸 Расходы: <b>${fmt(expense, chatId)}</b> (${expPct}%)\n` +
       `━━━━━━━━━━━━━━\n` +
-      `🟰 Баланс: <b>${fmt(balance)}</b>\n\n` +
+      `🟰 Баланс: <b>${fmt(balance, chatId)}</b>\n\n` +
       `${wisdom} — ${score}/100`
     );
     return;
@@ -197,7 +198,7 @@ async function handleMessage(msg) {
       const s = g.saved || 0;
       const pct = Math.min(Math.round((s / g.target) * 100), 100);
       const bar = '█'.repeat(Math.round(pct / 10)) + '░'.repeat(10 - Math.round(pct / 10));
-      return `🎯 <b>${g.name}</b>\n${bar} ${pct}%\n${fmt(s)} / ${fmt(g.target)}`;
+      return `🎯 <b>${g.name}</b>\n${bar} ${pct}%\n${fmt(s)} / ${fmt(g.target, chatId)}`;
     });
     await sendMessage(chatId, `🎯 <b>Цели накоплений</b>\n\n${lines.join('\n\n')}`);
     return;
@@ -254,7 +255,7 @@ async function handleMessage(msg) {
   const sign = (cat === 'expense') ? '−' : '+';
 
   await sendMessage(chatId,
-    `✅ <b>Записано</b>\n\n${catNames[cat]}: <b>${sign}${fmt(amount)}</b>\n📝 ${desc}\n\n<i>Напиши «баланс» чтобы проверить итоги.</i>`
+    `✅ <b>Записано</b>\n\n${catNames[cat]}: <b>${sign}${fmt(amount, chatId)}</b>\n📝 ${desc}\n\n<i>Напиши «баланс» чтобы проверить итоги.</i>`
   );
 }
 
