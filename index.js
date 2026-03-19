@@ -139,6 +139,7 @@ async function updateUser(chatId, data) {
 function isActive(user) {
   if (!user) return false;
   if (user.isAdmin) return true;
+  if (user.isVip) return true;
   if (user.isPaid && user.paidUntil && Date.now() < user.paidUntil) return true;
   if (Date.now() < user.trialEnd) return true;
   return false;
@@ -240,6 +241,7 @@ async function checkLimits(prefix, cur, chatId, entry) {
 // ── СТАТУС ПОДПИСКИ ───────────────────────────────────────
 function statusMsg(user) {
   if (user.isAdmin) return '👑 Администратор';
+  if (user.isVip) return '⭐️ VIP — пожизненный доступ';
   if (user.isPaid && user.paidUntil) {
     const days = Math.ceil((user.paidUntil - Date.now()) / (24*60*60*1000));
     return `✅ Подписка активна — ${days} дн.`;
@@ -336,6 +338,58 @@ async function handleMessage(msg) {
   const limitsCol   = db.collection(`${prefix}_limits`);
   const recurCol    = db.collection(`${prefix}_recurring`);
   const settingsDoc = db.collection(`${prefix}_settings`).doc('main');
+
+
+  // ── ADMIN: /vip ───────────────────────────────────────
+  if (lower.startsWith('/vip ') && user.isAdmin) {
+    const targetId = text.slice(5).trim();
+    const targetRef = db.collection('users').doc(targetId);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      await sendMessage(chatId, '❌ Пользователь ' + targetId + ' не найден.', MAIN_KB);
+      return;
+    }
+    await targetRef.update({ isVip: true, isPaid: false, paidUntil: null });
+    const t = targetSnap.data();
+    await sendMessage(chatId, '⭐️ Пользователь <b>' + (t.name||targetId) + '</b> (@' + (t.username||'—') + ') получил пожизненный доступ.', MAIN_KB);
+    await sendMessage(targetId, '⭐️ <b>Поздравляем!</b>\n\nТебе выдан пожизненный бесплатный доступ к Вавилонскому учёту.\n\n<i>«Богатство приходит к тому, кто его заслуживает.»</i>', MAIN_KB);
+    return;
+  }
+
+  // ── ADMIN: /revoke ────────────────────────────────────
+  if (lower.startsWith('/revoke ') && user.isAdmin) {
+    const targetId = text.slice(8).trim();
+    const targetRef = db.collection('users').doc(targetId);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      await sendMessage(chatId, '❌ Пользователь ' + targetId + ' не найден.', MAIN_KB);
+      return;
+    }
+    await targetRef.update({ isVip: false });
+    const t = targetSnap.data();
+    await sendMessage(chatId, '✅ VIP доступ у <b>' + (t.name||targetId) + '</b> отозван.', MAIN_KB);
+    return;
+  }
+
+  // ── ADMIN: /users ─────────────────────────────────────
+  if (lower === '/users' && user.isAdmin) {
+    const snap = await db.collection('users').orderBy('createdAt','desc').limit(20).get();
+    if (snap.empty) { await sendMessage(chatId, 'Пользователей пока нет.', MAIN_KB); return; }
+    const lines = snap.docs.map(d => {
+      const u = d.data();
+      let status = '❌';
+      if (u.isAdmin) status = '👑';
+      else if (u.isVip) status = '⭐️';
+      else if (u.isPaid && u.paidUntil && Date.now() < u.paidUntil) status = '✅';
+      else if (Date.now() < u.trialEnd) {
+        const left = Math.ceil((u.trialEnd - Date.now()) / (24*60*60*1000));
+        status = '🎁' + left + 'д';
+      }
+      return status + ' <b>' + (u.name||'—') + '</b> (@' + (u.username||'—') + ') — ' + u.chatId;
+    });
+    await sendMessage(chatId, '👥 <b>Пользователи</b> (' + snap.size + ')\n\n' + lines.join('\n'), MAIN_KB);
+    return;
+  }
 
   // ── /подписка / статус ────────────────────────────────
   if (lower === '/подписка' || lower === 'подписка' || lower === '/status') {
