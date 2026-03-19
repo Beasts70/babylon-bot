@@ -528,7 +528,7 @@ function startScheduler() {
   setInterval(async () => {
     const now = new Date();
     const h = now.getHours(), m = now.getMinutes(), d = now.getDate(), dow = now.getDay();
-    // Еженедельный отчёт — воскресенье 19:00
+    // Еженедельный отчёт — воскресенье 23:00
     if (dow===0 && h===19 && m===0) await sendWeeklyReports();
     // Регулярные платежи — 1-е число каждого месяца 09:00
     if (d===1 && h===9 && m===0) await processRecurringPayments();
