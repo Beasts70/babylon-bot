@@ -394,48 +394,46 @@ async function handleMessage(msg) {
   if(lower==='🏦 себе')      {userState[chatId]={cat:'save'};    await sendMessage(chatId,'🏦 Сумма: <code>15000</code>',MAIN_KB);return;}
   if(lower==='📈 инвестиции'){userState[chatId]={cat:'invest'};  await sendMessage(chatId,'📈 <code>etf 10000</code>',MAIN_KB);return;}
 
-  // 🎯 В СЧЁТ ЦЕЛИ
+  // ЦЕЛЬ
   if(lower==='🎯 в счёт цели') {
-    const snap = await goalsCol.orderBy('ts','asc').get();
-    if(snap.empty){ await sendMessage(chatId,'Целей пока нет. Добавь в веб-приложении.',MAIN_KB); return; }
-    const kb = snap.docs.map(d=>[d.data().name]);
-    kb.push(['❌ Отмена']);
-    userState[chatId] = { mode:'goal_select', goals: snap.docs.map(d=>({id:d.id,...d.data()})) };
-    await sendMessage(chatId,'🎯 Выбери цель:',kb);
+    const gsnap = await goalsCol.orderBy('ts','asc').get();
+    if(gsnap.empty){ await sendMessage(chatId,'Целей пока нет. Добавь в веб-приложении.',MAIN_KB); return; }
+    const gkb = gsnap.docs.map(d=>[d.data().name]);
+    gkb.push(['Отмена']);
+    userState[chatId] = { mode:'goal_select', glist: gsnap.docs.map(d=>({id:d.id,...d.data()})) };
+    await sendMessage(chatId,'Выбери цель:',gkb);
     return;
   }
 
-  // Обработка выбора цели
-  if(userState[chatId]?.mode==='goal_select') {
-    if(lower==='❌ отмена'){ delete userState[chatId]; await sendMessage(chatId,'Отменено.',MAIN_KB); return; }
-    const goals_list = userState[chatId].goals;
-    const chosen = goals_list.find(g=>g.name.toLowerCase()===lower);
-    if(!chosen){ await sendMessage(chatId,'Выбери цель из списка.',null); return; }
+  if(userState[chatId] && userState[chatId].mode==='goal_select') {
+    if(lower==='отмена'){ delete userState[chatId]; await sendMessage(chatId,'Отменено.',MAIN_KB); return; }
+    const glist = userState[chatId].glist;
+    const chosen = glist.find(function(g){ return g.name.toLowerCase()===lower; });
+    if(!chosen){ await sendMessage(chatId,'Выбери из списка.'); return; }
     userState[chatId] = { mode:'goal_amount', goal: chosen };
-    await sendMessage(chatId,,null);
+    const gsaved = chosen.saved||0;
+    await sendMessage(chatId,'Цель: '+chosen.name+'\nНакоплено: '+fmt(gsaved,user)+' / '+fmt(chosen.target,user)+'\nВведи сумму:');
     return;
   }
 
-  if(userState[chatId]?.mode==='goal_amount') {
-    const amount = parseFloat(text.replace(',','.'));
-    if(isNaN(amount)||amount<=0){ await sendMessage(chatId,'Введи сумму числом.',null); return; }
-    const goal = userState[chatId].goal;
+  if(userState[chatId] && userState[chatId].mode==='goal_amount') {
+    const gamt = parseFloat(text.replace(',','.'));
+    if(isNaN(gamt)||gamt<=0){ await sendMessage(chatId,'Введи сумму числом.'); return; }
+    const ggoal = userState[chatId].goal;
     delete userState[chatId];
-    const newSaved = Math.min((goal.saved||0)+amount, goal.target);
-    await goalsCol.doc(goal.id).update({saved: newSaved});
-    const entry = {desc:,cat:'goal',goalId:goal.id,amount,date:todayStr(),month:monthKey(),ts:Date.now(),source:'telegram'};
-    await entriesCol.add(entry);
-    const left = goal.target - newSaved;
-    const pct = Math.min(Math.round((newSaved/goal.target)*100),100);
-    const bar = '█'.repeat(Math.round(pct/10))+'░'.repeat(10-Math.round(pct/10));
-    await sendMessage(chatId,
-      ,
-      MAIN_KB
-    );
+    const gnewSaved = Math.min((ggoal.saved||0)+gamt, ggoal.target);
+    await goalsCol.doc(ggoal.id).update({saved: gnewSaved});
+    const gentry = {desc:'В счёт цели: '+ggoal.name, cat:'goal', goalId:ggoal.id, amount:gamt, date:todayStr(), month:monthKey(), ts:Date.now(), source:'telegram'};
+    await entriesCol.add(gentry);
+    const gleft = ggoal.target - gnewSaved;
+    const gpct = Math.min(Math.round((gnewSaved/ggoal.target)*100),100);
+    const gbar = ''.padStart(Math.round(gpct/10),'|')+''.padStart(10-Math.round(gpct/10),'.');
+    const gmsg = 'Записано!\n\nЦель: '+ggoal.name+'\n['+gbar+'] '+gpct+'%\n'+fmt(gnewSaved,user)+' / '+fmt(ggoal.target,user)+'\n'+(gleft>0?'Осталось: '+fmt(gleft,user):'Цель достигнута!');
+    await sendMessage(chatId, gmsg, MAIN_KB);
     return;
   }
 
-  // ── БЫСТРЫЙ ВВОД ─────────────────────────────────────
+    // ── БЫСТРЫЙ ВВОД ─────────────────────────────────────
   let cat=null;
   if(userState[chatId]){cat=userState[chatId].cat;delete userState[chatId];}
   const words=text.split(/\s+/);
