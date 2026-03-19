@@ -17,6 +17,7 @@ const TRIAL_DAYS = 7;
 const PRICE_RUB  = 299;
 const PRICE_EUR  = 3.99;
 const ADMIN_IDS  = ['5080699264']; // Арсен — бесплатный доступ навсегда
+const APP_URL    = 'https://roaring-pegasus-df74bc.netlify.app';
 
 // ── ВАЛЮТЫ ────────────────────────────────────────────────
 const CURRENCIES = {
