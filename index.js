@@ -18,6 +18,8 @@ const PRICE_RUB  = 299;
 const PRICE_EUR  = 3.99;
 const ADMIN_IDS  = ['5080699264']; // Арсен — бесплатный доступ навсегда
 const APP_URL    = 'https://roaring-pegasus-df74bc.netlify.app';
+const BOT_USERNAME = process.env.BOT_USERNAME || 'babylon_finance_bot';
+const REF_BONUS_DAYS = 30; // бонус за реферала (дней)
 
 // ── ВАЛЮТЫ ────────────────────────────────────────────────
 const CURRENCIES = {
@@ -115,8 +117,9 @@ async function getUser(chatId) {
   return snap.exists ? snap.data() : null;
 }
 
-async function createUser(chatId, telegramData) {
+async function createUser(chatId, telegramData, referredBy) {
   const now = Date.now();
+  const extraDays = referredBy ? REF_BONUS_DAYS : 0;
   const user = {
     chatId: String(chatId),
     name: telegramData.first_name || 'Пользователь',
@@ -124,12 +127,39 @@ async function createUser(chatId, telegramData) {
     currency: 'rub',
     prefix: `user_${chatId}`,
     createdAt: now,
-    trialEnd: now + TRIAL_DAYS * 24 * 60 * 60 * 1000,
+    trialEnd: now + (TRIAL_DAYS + extraDays) * 24 * 60 * 60 * 1000,
     isPaid: false,
     paidUntil: null,
     isAdmin: ADMIN_IDS.includes(String(chatId)),
+    referredBy: referredBy || null,
+    referralCount: 0,
   };
   await db.collection('users').doc(String(chatId)).set(user);
+
+  // Начисляем бонус пригласившему
+  if (referredBy) {
+    const refDoc = await db.collection('users').doc(String(referredBy)).get();
+    if (refDoc.exists) {
+      const refUser = refDoc.data();
+      const newCount = (refUser.referralCount || 0) + 1;
+      // Продлеваем его доступ на REF_BONUS_DAYS
+      let newEnd;
+      if (refUser.isPaid && refUser.paidUntil && refUser.paidUntil > Date.now()) {
+        newEnd = refUser.paidUntil + REF_BONUS_DAYS * 24 * 60 * 60 * 1000;
+        await db.collection('users').doc(String(referredBy)).update({ paidUntil: newEnd, referralCount: newCount });
+      } else {
+        newEnd = Math.max(refUser.trialEnd, Date.now()) + REF_BONUS_DAYS * 24 * 60 * 60 * 1000;
+        await db.collection('users').doc(String(referredBy)).update({ trialEnd: newEnd, referralCount: newCount });
+      }
+      // Уведомляем пригласившего
+      await sendMessage(String(referredBy),
+        '🎉 <b>Твой реферал зарегистрировался!</b>\n\n' +
+        '<b>' + (telegramData.first_name || 'Новый пользователь') + '</b> присоединился по твоей ссылке.\n\n' +
+        '🎁 Тебе начислено <b>' + REF_BONUS_DAYS + ' дней</b> бесплатного доступа!'
+      );
+    }
+  }
+
   return user;
 }
 
@@ -164,6 +194,7 @@ const MAIN_KB = [
   ['🎯 Цели',          '📅 Прошлый месяц'],
   ['⚠️ Лимиты',       '🔁 Регулярные'],
   ['🔍 Поиск',         '❓ Помощь'],
+  ['🤝 Реферал',        '💳 Подписка'],
 ];
 
 const CURRENCY_KB = [
@@ -263,8 +294,18 @@ async function handleMessage(msg) {
   // /start — регистрация или приветствие
   if (lower === '/start' || lower === 'меню' || lower === 'начало') {
     if (!user) {
-      // Новый пользователь — выбор валюты
-      user = await createUser(chatId, msg.from);
+      // Новый пользователь — проверяем реферальный код
+      // Формат: /start ref_CHATID
+      let referredBy = null;
+      const startParam = text.replace('/start', '').trim();
+      if (startParam.startsWith('ref_')) {
+        const refId = startParam.replace('ref_', '');
+        if (refId !== chatId && /^\d+$/.test(refId)) {
+          const refSnap = await db.collection('users').doc(refId).get();
+          if (refSnap.exists) referredBy = refId;
+        }
+      }
+      user = await createUser(chatId, msg.from, referredBy);
       await sendMessage(chatId,
         `🏛 <b>Добро пожаловать в Вавилонский учёт!</b>\n\n` +
         `Я помогу тебе контролировать финансы по принципам книги\n«Самый богатый человек в Вавилоне».\n\n` +
@@ -394,6 +435,25 @@ async function handleMessage(msg) {
   }
 
 
+
+  // /ref — реферальная ссылка
+  if (lower === '/ref' || lower === 'реферал' || lower === '/реферал' || lower === '🤝 реферал') {
+    const refLink = 'https://t.me/' + BOT_USERNAME + '?start=ref_' + chatId;
+    const refCount = user.referralCount || 0;
+    const bonusTotal = refCount * REF_BONUS_DAYS;
+    await sendMessage(chatId,
+      '🤝 <b>Реферальная программа</b>\n\n' +
+      'Поделись ссылкой с другом — вы <b>оба</b> получите ' + REF_BONUS_DAYS + ' дней бесплатно:\n\n' +
+      '<code>' + refLink + '</code>\n\n' +
+      '📊 Твоя статистика:\n' +
+      '👥 Приглашено: <b>' + refCount + '</b> чел.\n' +
+      '🎁 Заработано: <b>' + bonusTotal + '</b> дней\n\n' +
+      '<i>Нажми на ссылку чтобы скопировать и отправить другу</i>',
+      MAIN_KB
+    );
+    return;
+  }
+
   // /app — персональная ссылка
   if (lower === '/app' || lower === 'приложение') {
     await sendMessage(chatId,
@@ -407,7 +467,7 @@ async function handleMessage(msg) {
   }
 
   // ── /подписка / статус ────────────────────────────────
-  if (lower === '/подписка' || lower === 'подписка' || lower === '/status') {
+  if (lower === '/подписка' || lower === 'подписка' || lower === '/status' || lower === '💳 подписка') {
     const price = cur.symbol === '₽' ? `${PRICE_RUB}₽` : `${PRICE_EUR}€`;
     await sendMessage(chatId,
       `💳 <b>Подписка</b>\n\n${statusMsg(user)}\n\nСтоимость: <b>${price}/месяц</b>`,
@@ -667,7 +727,8 @@ async function handleMessage(msg) {
       '/pdf — отчёт за текущий месяц\n'+
       '/валюта — сменить валюту\n'+
       '/подписка — статус и оплата\n'+
-      '/app — открыть веб-приложение\n\n'+
+      '/app — открыть веб-приложение\n'+
+      '/ref — реферальная ссылка\n\n'+
       '<b>Лимиты:</b> <code>лимит еда 5000</code>\n'+
       '<b>Регулярные:</b> <code>каждый аренда 50000</code>\n\n'+
       '<i>Подписка: '+price+'/месяц</i>',
