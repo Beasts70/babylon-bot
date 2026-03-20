@@ -86,19 +86,30 @@ async function sendInvoice(chatId, cur) {
   const body = {
     chat_id: chatId,
     title: '🏛 Вавилонский учёт — Подписка',
-    description: `Полный доступ на 30 дней. Цели, лимиты, отчёты, история без ограничений.`,
-    payload: `sub_${chatId}_${Date.now()}`,
-    currency: isRub ? 'RUB' : 'EUR',
+    description: 'Полный доступ на 30 дней. Цели, лимиты, отчёты, история без ограничений.',
+    payload: 'sub_' + chatId + '_' + Date.now(),
+    provider_token: process.env.PROVIDER_TOKEN || '',
+    currency: isRub ? 'RUB' : 'XTR',
     prices: isRub
       ? [{ label: 'Подписка 1 месяц', amount: PRICE_RUB * 100 }]
-      : [{ label: 'Subscription 1 month', amount: Math.round(PRICE_EUR * 100) }],
-    provider_token: '', // Telegram Stars — не нужен токен
+      : [{ label: 'Subscription 1 month', amount: 150 }],
+    need_email: false,
+    need_phone_number: false,
+    is_flexible: false,
+    protect_content: false,
   };
-  await fetch(`${API}/sendInvoice`, {
+  const r = await fetch(API + '/sendInvoice', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  const result = await r.json();
+  if (!result.ok) {
+    console.error('sendInvoice error:', JSON.stringify(result));
+    await sendMessage(chatId,
+      '❌ Не удалось создать счёт. Попробуй позже или напиши @' + (process.env.SUPPORT_USERNAME || 'ars_trd') + ' для помощи.'
+    );
+  }
 }
 
 async function sendDocument(chatId, filename, content, caption) {
@@ -468,12 +479,17 @@ async function handleMessage(msg) {
 
   // ── /подписка / статус ────────────────────────────────
   if (lower === '/подписка' || lower === 'подписка' || lower === '/status' || lower === '💳 подписка') {
-    const price = cur.symbol === '₽' ? `${PRICE_RUB}₽` : `${PRICE_EUR}€`;
+    const price = cur.symbol === '₽' ? PRICE_RUB + '₽' : PRICE_EUR + '€';
     await sendMessage(chatId,
-      `💳 <b>Подписка</b>\n\n${statusMsg(user)}\n\nСтоимость: <b>${price}/месяц</b>`,
+      '💳 <b>Подписка</b>\n\n' + statusMsg(user) + '\n\n' +
+      'Стоимость: <b>' + price + '/месяц</b>\n\n' +
+      '✅ Неограниченные записи\n' +
+      '✅ Цели, лимиты, регулярные платежи\n' +
+      '✅ Еженедельные отчёты\n' +
+      '✅ Веб-приложение и синхронизация',
       MAIN_KB,
       { reply_markup: { inline_keyboard: [[
-        { text: `💳 Оплатить ${price}/мес`, callback_data: 'pay' }
+        { text: '💳 Оплатить ' + price + '/мес', callback_data: 'pay' }
       ]]}}
     );
     return;
