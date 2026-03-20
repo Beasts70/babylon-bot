@@ -395,6 +395,104 @@ async function handleMessage(msg) {
 
 
 
+
+  // ── ADMIN: РАССЫЛКА ───────────────────────────────────
+  if (lower === '/broadcast' && user.isAdmin) {
+    userState[chatId] = { mode: 'broadcast_group' };
+    await sendMessage(chatId,
+      '📢 <b>Рассылка</b>\n\nКому отправить?',
+      [
+        ['👥 Всем активным', '💳 Платящим'],
+        ['🎁 На триале',     '❌ Истёкшим'],
+        ['🚫 Отмена'],
+      ]
+    );
+    return;
+  }
+
+  if (userState[chatId] && userState[chatId].mode === 'broadcast_group') {
+    if (lower === '🚫 отмена') {
+      delete userState[chatId];
+      await sendMessage(chatId, 'Отменено.', MAIN_KB);
+      return;
+    }
+    const groupMap = {
+      '👥 всем активным': 'all',
+      '💳 платящим':      'paid',
+      '🎁 на триале':     'trial',
+      '❌ истёкшим':      'expired',
+    };
+    const group = groupMap[lower];
+    if (!group) {
+      await sendMessage(chatId, 'Выбери группу из списка.');
+      return;
+    }
+    userState[chatId] = { mode: 'broadcast_text', group };
+
+    // Показываем количество получателей
+    const snap = await db.collection('users').get();
+    let users = snap.docs.map(d => d.data());
+    const now = Date.now();
+    let count = 0;
+    if (group === 'paid')    count = users.filter(u => u.isPaid && u.paidUntil && u.paidUntil > now).length;
+    else if (group === 'trial')   count = users.filter(u => !u.isPaid && u.trialEnd > now && !u.isAdmin && !u.isVip).length;
+    else if (group === 'expired') count = users.filter(u => !isActive(u) && !u.isAdmin).length;
+    else count = users.filter(u => isActive(u) && !u.isAdmin).length;
+
+    const groupNames = { all: 'всем активным', paid: 'платящим', trial: 'на триале', expired: 'истёкшим' };
+    await sendMessage(chatId,
+      '📢 Рассылка <b>' + groupNames[group] + '</b> — <b>' + count + '</b> получателей\n\n' +
+      'Напиши текст сообщения. Поддерживается HTML разметка:\n' +
+      '<code>&lt;b&gt;жирный&lt;/b&gt;</code>, <code>&lt;i&gt;курсив&lt;/i&gt;</code>\n\n' +
+      'Или нажми /cancel для отмены.',
+      [['🚫 Отмена']]
+    );
+    return;
+  }
+
+  if (userState[chatId] && userState[chatId].mode === 'broadcast_text') {
+    if (lower === '🚫 отмена' || lower === '/cancel') {
+      delete userState[chatId];
+      await sendMessage(chatId, 'Отменено.', MAIN_KB);
+      return;
+    }
+    const group = userState[chatId].group;
+    delete userState[chatId];
+
+    // Подтверждение перед отправкой
+    userState[chatId] = { mode: 'broadcast_confirm', group, text };
+    await sendMessage(chatId,
+      '📢 <b>Предпросмотр сообщения:</b>\n\n' + text + '\n\n' +
+      'Отправить?',
+      [['✅ Отправить', '🚫 Отмена']]
+    );
+    return;
+  }
+
+  if (userState[chatId] && userState[chatId].mode === 'broadcast_confirm') {
+    if (lower === '🚫 отмена') {
+      delete userState[chatId];
+      await sendMessage(chatId, 'Отменено.', MAIN_KB);
+      return;
+    }
+    if (lower === '✅ отправить') {
+      const { group, text: bText } = userState[chatId];
+      delete userState[chatId];
+      await sendMessage(chatId, '⏳ Отправляю...', MAIN_KB);
+      const result = await sendBroadcast(bText, group);
+      await sendMessage(chatId,
+        '✅ <b>Рассылка завершена</b>\n\n' +
+        '📤 Отправлено: <b>' + result.sent + '</b>\n' +
+        '❌ Ошибок: <b>' + result.failed + '</b>\n' +
+        '👥 Всего: <b>' + result.total + '</b>',
+        MAIN_KB
+      );
+      return;
+    }
+    await sendMessage(chatId, 'Нажми ✅ Отправить или 🚫 Отмена.');
+    return;
+  }
+
   // ── ADMIN: /stats ─────────────────────────────────────
   if (lower === '/stats' && user.isAdmin) {
     const snap = await db.collection('users').get();
@@ -1012,6 +1110,39 @@ function startScheduler() {
     if(h===11&&m===0)          await processOnboarding();
     if(h===12&&m===0)          await checkTrialReminders();
   },60000);
+}
+
+
+// ── РАССЫЛКА ──────────────────────────────────────────────
+async function sendBroadcast(text, targetGroup) {
+  const snap = await db.collection('users').get();
+  let users = snap.docs.map(d => d.data());
+
+  // Фильтр по группе
+  if (targetGroup === 'paid') {
+    users = users.filter(u => u.isPaid && u.paidUntil && u.paidUntil > Date.now());
+  } else if (targetGroup === 'trial') {
+    users = users.filter(u => !u.isPaid && u.trialEnd > Date.now() && !u.isAdmin && !u.isVip);
+  } else if (targetGroup === 'expired') {
+    users = users.filter(u => !isActive(u) && !u.isAdmin);
+  } else {
+    // all — все активные
+    users = users.filter(u => isActive(u) && !u.isAdmin);
+  }
+
+  let sent = 0, failed = 0;
+  for (const u of users) {
+    try {
+      await sendMessage(u.chatId, text);
+      sent++;
+      // Небольшая пауза чтобы не превысить лимиты Telegram
+      await new Promise(r => setTimeout(r, 50));
+    } catch(e) {
+      failed++;
+      console.error('broadcast error', u.chatId, e.message);
+    }
+  }
+  return { sent, failed, total: users.length };
 }
 
 // ── WEBHOOK ───────────────────────────────────────────────
