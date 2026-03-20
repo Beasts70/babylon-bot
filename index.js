@@ -394,6 +394,59 @@ async function handleMessage(msg) {
   const settingsDoc = db.collection(`${prefix}_settings`).doc('main');
 
 
+
+  // ── ADMIN: /stats ─────────────────────────────────────
+  if (lower === '/stats' && user.isAdmin) {
+    const snap = await db.collection('users').get();
+    const all = snap.docs.map(d => d.data());
+    const now = Date.now();
+
+    const total      = all.length;
+    const active     = all.filter(u => isActive(u)).length;
+    const paid       = all.filter(u => u.isPaid && u.paidUntil && u.paidUntil > now).length;
+    const trial      = all.filter(u => !u.isPaid && u.trialEnd > now).length;
+    const expired    = all.filter(u => !isActive(u) && !u.isAdmin).length;
+    const vip        = all.filter(u => u.isVip).length;
+    const refTotal   = all.reduce((s, u) => s + (u.referralCount || 0), 0);
+
+    // Выручка из payments
+    const paySnap = await db.collection('payments').get();
+    const payments = paySnap.docs.map(d => d.data());
+    const revenue  = payments.filter(p => p.currency === 'RUB').reduce((s, p) => s + (p.amount / 100), 0);
+    const payCount = payments.length;
+
+    // Активные за последние 7 дней (есть записи)
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    let activeWeek = 0;
+    for (const u of all) {
+      if (u.isAdmin) continue;
+      const eSnap = await db.collection(u.prefix + '_entries')
+        .where('ts', '>=', weekAgo).limit(1).get();
+      if (!eSnap.empty) activeWeek++;
+    }
+
+    // Новые за сегодня
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+    const newToday = all.filter(u => u.createdAt > dayAgo).length;
+
+    await sendMessage(chatId,
+      '📊 <b>Статистика бота</b>\n\n' +
+      '👥 Всего пользователей: <b>' + total + '</b>\n' +
+      '✅ Активных сейчас: <b>' + active + '</b>\n' +
+      '💳 Платящих: <b>' + paid + '</b>\n' +
+      '🎁 На триале: <b>' + trial + '</b>\n' +
+      '❌ Истёкших: <b>' + expired + '</b>\n' +
+      '⭐️ VIP: <b>' + vip + '</b>\n\n' +
+      '📅 Новых сегодня: <b>' + newToday + '</b>\n' +
+      '🔥 Активных за 7 дней: <b>' + activeWeek + '</b>\n' +
+      '🤝 Рефералов всего: <b>' + refTotal + '</b>\n\n' +
+      '💰 Платежей: <b>' + payCount + '</b>\n' +
+      '💰 Выручка: <b>' + Math.round(revenue) + ' ₽</b>',
+      MAIN_KB
+    );
+    return;
+  }
+
   // ── ADMIN: /vip ───────────────────────────────────────
   if (lower.startsWith('/vip ') && user.isAdmin) {
     const targetId = text.slice(5).trim();
@@ -818,6 +871,48 @@ async function handleSuccessfulPayment(msg) {
   );
 }
 
+
+// ── ОНБОРДИНГ ─────────────────────────────────────────────
+async function sendOnboarding(chatId, day) {
+  const messages = {
+    1: '🏛 <b>День 1 — Первый закон Вавилона</b>\n\n«Часть всего, что зарабатываешь, — твоя и должна остаться у тебя.»\n\nЗадание: внеси доход и сразу отложи 10% себе.\n\n<code>+зарплата 50000</code>\nзатем: <code>себе 5000</code>',
+    3: '📊 <b>День 3 — Контролируй расходы</b>\n\nМудрый вавилонянин живёт на 70–80% дохода. Попробуй установить лимит:\n\n<code>лимит еда 10000</code>\n\nИ посмотри баланс: нажми 📊 Баланс',
+    5: '🎯 <b>День 5 — Поставь цель</b>\n\n«Где нет цели — нет богатства». Резервный фонд на 3 месяца расходов — первая цель.\n\nЗайди в веб-приложение и создай первую цель:\n/app',
+    7: '⏰ <b>Пробный период заканчивается завтра</b>\n\nТы попробовал все возможности. Продолжи путь к богатству:\n\n💳 /подписка',
+  };
+  if (messages[day]) {
+    await sendMessage(chatId, messages[day]);
+  }
+}
+
+async function processOnboarding() {
+  const snap = await db.collection('users')
+    .where('isPaid', '==', false)
+    .get();
+
+  const now = Date.now();
+  for (const doc of snap.docs) {
+    const u = doc.data();
+    if (u.isAdmin || u.isVip) continue;
+    if (!u.createdAt) continue;
+
+    const daysSince = Math.floor((now - u.createdAt) / (24 * 60 * 60 * 1000));
+    const sentDays = u.onboardingSent || [];
+
+    for (const day of [1, 3, 5, 7]) {
+      if (daysSince >= day && !sentDays.includes(day)) {
+        try {
+          await sendOnboarding(u.chatId, day);
+          await db.collection('users').doc(u.chatId).update({
+            onboardingSent: [...sentDays, day]
+          });
+        } catch(e) { console.error('onboarding error', u.chatId, e.message); }
+        break; // один в день максимум
+      }
+    }
+  }
+}
+
 // ── ПЛАНИРОВЩИК ───────────────────────────────────────────
 async function sendWeeklyReports() {
   const usersSnap = await db.collection('users').get();
@@ -914,6 +1009,7 @@ function startScheduler() {
     if(dow===0&&h===19&&m===0) await sendWeeklyReports();
     if(d===1&&h===9&&m===0)    await processRecurring();
     if(h===10&&m===0)          await checkSaveReminders();
+    if(h===11&&m===0)          await processOnboarding();
     if(h===12&&m===0)          await checkTrialReminders();
   },60000);
 }
